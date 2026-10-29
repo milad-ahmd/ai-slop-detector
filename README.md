@@ -13,7 +13,7 @@
 ![Category](https://img.shields.io/badge/category-Writing-blue)
 ![Works with](https://img.shields.io/badge/works%20with-Claude%20Code%20%7C%20Cline%20%7C%20Cursor%20%7C%20Codex-8A2BE2)
 
-[Install](#-install) · [Usage](#-usage) · [How it works](skills/ai-slop-detector/SKILL.md) · [All skills](https://github.com/milad-ahmd/agent-skills)
+[Install](#-install) · [Usage](#-usage) · [Use in CI](#-use-it-in-ci) · [How it works](skills/ai-slop-detector/SKILL.md) · [All skills](https://github.com/milad-ahmd/agent-skills)
 
 <img src="assets/demo.gif" alt="ai-slop-detector demo (real output)" width="760"/>
 
@@ -49,6 +49,50 @@ Does this sound like AI? Make it sound human
 ```
 
 The full workflow, rules and output format are in [`SKILL.md`](skills/ai-slop-detector/SKILL.md).
+
+Or run the scanner yourself (Python 3.10+, no dependencies):
+
+```bash
+python3 skills/ai-slop-detector/scripts/slop_scan.py draft.md
+python3 skills/ai-slop-detector/scripts/slop_scan.py 'docs/**/*.md' --json
+pbpaste | python3 skills/ai-slop-detector/scripts/slop_scan.py -
+```
+
+## ✅ Use it in CI
+
+This repo is also a GitHub Action. It annotates pull requests with AI-sounding patterns (line, pattern, and a plainer alternative) and writes a score table to the job summary.
+
+```yaml
+# .github/workflows/slop.yml
+name: Slop check
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  slop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: milad-ahmd/ai-slop-detector@v1
+        with:
+          files: "README.md docs/**/*.md"
+          exclude: "CHANGELOG.md docs/archive/**"
+          pr-body: true
+```
+
+| input | default | what it does |
+|---|---|---|
+| `files` | `**/*.md` | Files, directories or globs, separated by spaces or newlines. The scanner expands globs; `**` is recursive. |
+| `exclude` | | Globs to skip. `node_modules`, `.git`, `vendor` and `.venv` are always skipped. |
+| `pr-body` | `false` | Also scan the pull request description. It is passed to the scanner through an environment variable and stdin, never interpolated into the shell. |
+| `fail-above` | empty | Fail the step when any text scores above this number (0-100). Empty means annotate only. |
+| `min-words` | `50` | Skip texts shorter than this. |
+| `max-annotations` | `10` | Inline warnings to emit (GitHub shows at most 10 per step). |
+
+The score is 0-100: below 20 is low, 20-29 moderate, 30 and above high. Code blocks, inline code and URLs are ignored. It needs `python3` on the runner, which GitHub-hosted Ubuntu and macOS runners have.
+
+Start with annotate-only. If you turn on `fail-above`, treat it as a nudge for docs, not a gate on people: the scanner measures **style signals, not authorship**, and formal human writing can score high while edited AI text can score low. Benchmark numbers and their caveats are in [`bench/README.md`](skills/ai-slop-detector/bench/README.md).
 
 ## 🧩 More skills
 

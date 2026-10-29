@@ -1,0 +1,86 @@
+name: "AI Slop Detector: flag AI-sounding writing"
+description: "Annotate Markdown files and PR descriptions with AI-sounding style patterns and a 0-100 slop-signal score. Style signals, not authorship."
+author: "Milad Ahmadi"
+branding:
+  icon: "edit-3"
+  color: "purple"
+
+inputs:
+  files:
+    description: "Files, directories or globs to scan, separated by spaces or newlines. Globs are expanded by the scanner (** is recursive), not by the shell."
+    required: false
+    default: "**/*.md"
+  exclude:
+    description: "Globs to skip, separated by spaces or newlines (for example CHANGELOG.md docs/archive/**)."
+    required: false
+    default: ""
+  pr-body:
+    description: "Also scan the pull request description (true or false). Ignored outside pull_request events."
+    required: false
+    default: "false"
+  fail-above:
+    description: "Fail the step when any text scores above this number (0-100). Leave empty to annotate only."
+    required: false
+    default: ""
+  min-words:
+    description: "Skip texts shorter than this many words."
+    required: false
+    default: "50"
+  max-annotations:
+    description: "Maximum number of inline warning annotations (GitHub shows at most 10 per step)."
+    required: false
+    default: "10"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Scan for AI-sounding writing
+      shell: bash
+      env:
+        # Every input reaches the script through the environment, never through ${{ }} inside the script,
+        # so a pull request description can't inject shell code.
+        INPUT_FILES: ${{ inputs.files }}
+        INPUT_EXCLUDE: ${{ inputs.exclude }}
+        INPUT_PR_BODY: ${{ inputs.pr-body }}
+        INPUT_FAIL_ABOVE: ${{ inputs.fail-above }}
+        INPUT_MIN_WORDS: ${{ inputs.min-words }}
+        INPUT_MAX_ANNOTATIONS: ${{ inputs.max-annotations }}
+        PR_BODY: ${{ github.event.pull_request.body }}
+      run: |
+        set -euo pipefail
+        set -f  # globs are expanded by the scanner, not by the shell
+        scanner="${GITHUB_ACTION_PATH}/skills/ai-slop-detector/scripts/slop_scan.py"
+        py=python3
+        command -v python3 >/dev/null 2>&1 || py=python
+
+        num='^[0-9]+([.][0-9]+)?$'
+        for v in "${INPUT_MIN_WORDS:-50}" "${INPUT_MAX_ANNOTATIONS:-10}"; do
+          [[ "$v" =~ $num ]] || { echo "::error title=AI Slop Detector::min-words and max-annotations must be numbers"; exit 2; }
+        done
+        args=(--format github --min-words "${INPUT_MIN_WORDS:-50}" --max-annotations "${INPUT_MAX_ANNOTATIONS:-10}")
+        if [[ -n "${INPUT_FAIL_ABOVE:-}" ]]; then
+          [[ "$INPUT_FAIL_ABOVE" =~ $num ]] || { echo "::error title=AI Slop Detector::fail-above must be a number or empty"; exit 2; }
+          args+=(--fail-above "$INPUT_FAIL_ABOVE")
+        fi
+        for g in ${INPUT_EXCLUDE:-}; do args+=(--exclude "$g"); done
+
+        targets=()
+        for g in ${INPUT_FILES:-}; do targets+=("$g"); done
+
+        status=0
+        if (( ${#targets[@]} )); then
+          "$py" "$scanner" "${args[@]}" -- "${targets[@]}" || status=$?
+        fi
+
+        case "${INPUT_PR_BODY:-false}" in
+          true|True|TRUE|yes|1)
+            if [[ -n "${PR_BODY:-}" ]]; then
+              s=0
+              printf '%s\n' "$PR_BODY" | "$py" "$scanner" "${args[@]}" --stdin-name "pull request description" - || s=$?
+              if (( s > status )); then status=$s; fi
+            else
+              echo "pr-body: no pull request description to scan (empty, or not a pull_request event)."
+            fi
+            ;;
+        esac
+        exit "$status"
